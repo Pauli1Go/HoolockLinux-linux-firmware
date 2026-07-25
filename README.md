@@ -19,7 +19,7 @@ explicitly says to run them on the iPad.
 ## Requirements
 
 - [`ipsw`](https://github.com/blacktop/ipsw) (tested with version 3.1.696)
-- Python 3.11
+- Python 3
 - `curl`
 - `shasum` on macOS or an equivalent SHA-256 tool
 - Git, `make`, and a C compiler to build `makez2fw`
