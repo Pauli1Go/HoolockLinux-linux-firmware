@@ -1,0 +1,13 @@
+# Downloaded or extracted Apple firmware
+*.ipsw
+kernel/
+touch/
+J172_Multitouch.mtfw
+t8010-smartio.bin
+dfrmtfw-*.bin
+
+# Device-specific calibration
+syscfg.bin
+
+# macOS metadata
+.DS_Store
