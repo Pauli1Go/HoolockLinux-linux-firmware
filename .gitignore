@@ -2,12 +2,17 @@
 *.ipsw
 kernel/
 touch/
+wifi/
 J172_Multitouch.mtfw
 t8010-smartio.bin
 dfrmtfw-*.bin
+generated-wifi/
+brcmfmac4355c1-pcie.*
+__pycache__/
 
 # Device-specific calibration
 syscfg.bin
+m1n1-syscfg.payload
 
 # macOS metadata
 .DS_Store
