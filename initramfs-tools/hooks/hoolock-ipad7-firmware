@@ -31,6 +31,7 @@ copy_required_firmware()
 
 copy_required_firmware /lib/firmware/apple/t8010-smartio.bin
 copy_required_firmware /lib/firmware/apple/dfrmtfw-j172-k1f19-6.bin
+copy_required_firmware /lib/firmware/brcm/BCM4355C1.hcd
 copy_required_firmware /lib/firmware/regulatory.db
 copy_required_firmware /lib/firmware/regulatory.db.p7s
 

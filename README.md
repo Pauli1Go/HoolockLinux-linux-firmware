@@ -3,14 +3,15 @@
 This repository documents how to reproduce the firmware required by
 HoolockLinux on the cellular seventh-generation iPad (`iPad7,12`,
 T8010/J172). It covers the Apple SmartIO and Z2 touchscreen firmware, the
-Broadcom BCM4355C1 Wi-Fi files used by `brcmfmac`, and the private SysCfg data
-needed for touchscreen and Wi-Fi calibration.
+Broadcom BCM4355C1 Wi-Fi files used by `brcmfmac`, the BCM4355C1 Bluetooth
+Patchram firmware, and the private SysCfg data used by the supported drivers.
 
 The completed installation contains:
 
 ```text
 /lib/firmware/apple/t8010-smartio.bin
 /lib/firmware/apple/dfrmtfw-j172-k1f19-6.bin
+/lib/firmware/brcm/BCM4355C1.hcd
 /lib/firmware/brcm/brcmfmac4355c1-pcie.apple,rudderb-*.bin
 /lib/firmware/brcm/brcmfmac4355c1-pcie.apple,rudderb-*.txt
 /lib/firmware/brcm/brcmfmac4355c1-pcie.apple,rudderb-*.clm_blob
@@ -19,7 +20,7 @@ The completed installation contains:
 
 This repository does not distribute Apple firmware, Wi-Fi NVRAM, or
 device-specific calibration. The steps below extract the common firmware from
-Apple's public iPadOS restore image and read calibration only from the user's
+Apple's public iPadOS restore image and read private data only from the user's
 own iPad.
 
 The documented and validated reference image is iPadOS 18.7.9 (22H355) for
@@ -33,7 +34,7 @@ explicitly says to run them on the iPad.
 - Python 3
 - `curl`
 - `shasum` on macOS or an equivalent SHA-256 tool
-- Git, `make`, and a C compiler to build `makez2fw`
+- Git, `make`, and a C compiler to build `makez2fw` and `hcdpack`
 - Linux running on the target iPad to read its SysCfg partition
 - root access to the target root filesystem or initramfs for installation
 
@@ -243,9 +244,16 @@ ssh "root@$IPAD_ADDRESS" rm -f /tmp/syscfg.bin
 ```
 
 SysCfg contains device-specific touchscreen calibration, the Wi-Fi MAC
-address in `WMac`, and the Wi-Fi calibration blob in `WCAL`. Do not reuse a
-dump from another iPad. Never publish it, attach it to a bug report, or commit
-it to Git.
+address in `WMac`, the Wi-Fi calibration blob in `WCAL`, the Bluetooth address
+in `BMac`, and Bluetooth calibration records including `BTRx`, `BTTx`, and
+`BCAL`. Do not reuse a dump from another iPad. Never publish it, attach it to a
+bug report, or commit it to Git.
+
+The patched loader supplies `BMac` as the standard Device Tree
+`local-bd-address`. Bluetooth RF calibration from `BTRx`, `BTTx`, and `BCAL`
+is still open and is not implemented in the Linux driver or loader path. The
+controller therefore currently operates with the calibration contained in, or
+defaults selected by, its Patchram firmware.
 
 ## 5. Build the calibrated Z2 firmware
 
@@ -353,9 +361,78 @@ manual firmware override. The plain fallback uses the validated `m-2.5`
 profile and is not a substitute for checking the OTP-specific request on a
 different device.
 
-## 8. Install the firmware
+## 8. Extract the BCM4355C1 Bluetooth firmware
 
-Install the touch and Wi-Fi files into the target root filesystem:
+The BCM4355C1 Bluetooth Patchram image is embedded in `/usr/sbin/BlueTool` in
+the same iPadOS filesystem. Extract that file:
+
+```sh
+ipsw extract \
+  --files \
+  --pattern '^usr/sbin/BlueTool$' \
+  --output bluetooth \
+  iPad_10.2_18.7.9_22H355_Restore.ipsw
+
+BLUETOOL='bluetooth/22H355__iPad7,11_12/usr/sbin/BlueTool'
+test -f "$BLUETOOL"
+```
+
+Verify the extracted binary:
+
+```sh
+test "$(wc -c < "$BLUETOOL" | tr -d ' ')" = 5221024
+shasum -a 256 "$BLUETOOL"
+```
+
+Expected SHA-256:
+
+```text
+dadd9b2086cbc98bb498e4899ce42303a3a03fe0509955bf2de583447532b0e0
+```
+
+Build the `hcdpack` extractor from the pinned Project Sandcastle revision:
+
+```sh
+git clone https://github.com/corellium/projectsandcastle.git
+git -C projectsandcastle checkout \
+  03db9c6ae04141eb940f3b9f56d446f50d57fadf
+make -C projectsandcastle/hcdpack \
+  CFLAGS='-O2 -Wall -I. -D_DARWIN_C_SOURCE'
+```
+
+The extra feature macro keeps `strdup()` visible when building this revision
+with Apple's current Clang and is harmless on Linux.
+
+Extract the Murata RudderB image selected by the validated J172 OTP profile:
+
+```sh
+projectsandcastle/hcdpack/hcdpack \
+  "$BLUETOOL" \
+  'C-4355__s-C1' \
+  rudderB \
+  'M-YSBU_V-m__m-2.5' \
+  BCM4355C1.hcd
+```
+
+Verify the generated firmware:
+
+```sh
+test "$(wc -c < BCM4355C1.hcd | tr -d ' ')" = 76184
+shasum -a 256 BCM4355C1.hcd
+```
+
+Expected SHA-256:
+
+```text
+27b778a87f086d8c23f0ad06c77e4b62de9af83182f100ddf4a6e59b1d4249b7
+```
+
+The profile above is tied to the tested Murata module. Do not silently reuse
+it on a device whose Wi-Fi OTP reports a different module or NVRAM profile.
+
+## 9. Install the firmware
+
+Install the touch, Wi-Fi, and Bluetooth files into the target root filesystem:
 
 ```sh
 sudo install -d /lib/firmware/apple /lib/firmware/brcm
@@ -363,6 +440,8 @@ sudo install -m 0644 t8010-smartio.bin \
   /lib/firmware/apple/t8010-smartio.bin
 sudo install -m 0644 dfrmtfw-j172-k1f19-6.bin \
   /lib/firmware/apple/dfrmtfw-j172-k1f19-6.bin
+sudo install -m 0644 BCM4355C1.hcd \
+  /lib/firmware/brcm/BCM4355C1.hcd
 sudo install -m 0644 generated-wifi/brcm/* /lib/firmware/brcm/
 ```
 
@@ -374,11 +453,11 @@ sudo apt-get update
 sudo apt-get install wireless-regdb
 ```
 
-The tested kernel has the touch and Wi-Fi drivers built in, so all firmware
-and `regulatory.db` must also be present in the early initramfs. Generic
-initramfs dependency discovery may omit firmware for built-in drivers. On
-Debian or Ubuntu, install the provided `initramfs-tools` hook and rebuild the
-initramfs:
+The tested kernel has the touch, Wi-Fi, and Bluetooth drivers built in, so all
+firmware and `regulatory.db` must also be present in the early initramfs.
+Generic initramfs dependency discovery may omit firmware for built-in drivers.
+On Debian or Ubuntu, install the provided `initramfs-tools` hook and rebuild
+the initramfs:
 
 ```sh
 sudo install -m 0755 \
@@ -395,6 +474,7 @@ Verify the installed files:
 ```sh
 test -s /lib/firmware/apple/t8010-smartio.bin
 test -s /lib/firmware/apple/dfrmtfw-j172-k1f19-6.bin
+test -s /lib/firmware/brcm/BCM4355C1.hcd
 test -s /lib/firmware/regulatory.db
 test -s /lib/firmware/regulatory.db.p7s
 test "$(find /lib/firmware/brcm -maxdepth 1 \
@@ -409,6 +489,7 @@ INITRAMFS="/boot/initrd.img-$(uname -r)"
 test -f "$INITRAMFS"
 lsinitramfs "$INITRAMFS" | grep -q 'apple/t8010-smartio.bin$'
 lsinitramfs "$INITRAMFS" | grep -q 'apple/dfrmtfw-j172-k1f19-6.bin$'
+lsinitramfs "$INITRAMFS" | grep -q 'brcm/BCM4355C1.hcd$'
 lsinitramfs "$INITRAMFS" | grep -q 'regulatory.db$'
 lsinitramfs "$INITRAMFS" | grep -q 'regulatory.db.p7s$'
 test "$(lsinitramfs "$INITRAMFS" |
@@ -419,11 +500,11 @@ The kernel loads the Apple and Broadcom files automatically through the
 standard Linux firmware API. No module parameter, firmware-path override,
 driver rebind, or userspace firmware daemon is required.
 
-## 9. Provide SysCfg to the patched m1n1 loader
+## 10. Provide SysCfg to the patched m1n1 loader
 
-Wi-Fi firmware files and SysCfg use different kernel interfaces. The
-Broadcom files above are loaded from `/lib/firmware`; the private `WMac` and
-`WCAL` values are provided through NVMEM by the patched
+Broadcom firmware files and SysCfg use different kernel interfaces. The
+Wi-Fi and Bluetooth files above are loaded from `/lib/firmware`; the private
+`WMac` and `WCAL` values are provided through NVMEM by the patched
 [`m1n1-ipad7`](https://github.com/Pauli1Go/m1n1-ipad7) loader.
 
 Create the bounded SysCfg payload component:
@@ -449,24 +530,28 @@ test "$(wc -c < m1n1-syscfg.payload | tr -d ' ')" = 131087
 
 Append this component exactly once after the normal kernel, Device Tree, and
 initramfs components when constructing a payload for the patched loader. The
-loader reserves a private copy, publishes it as `apple,syscfg-rmem`, and
-connects the `WMac` and `WCAL` cells to the BCM4355 device. Do not install
-`syscfg.bin` under `/lib/firmware`, and do not use a SysCfg dump from another
-iPad.
+loader reserves a private copy, publishes it as `apple,syscfg-rmem`, connects
+the `WMac` and `WCAL` cells to the BCM4355 Wi-Fi device, and supplies the
+Bluetooth `local-bd-address`. Do not install `syscfg.bin` under
+`/lib/firmware`, and do not use a SysCfg dump from another iPad.
+
+This does not provide Bluetooth RF calibration. Consumption of the private
+`BTRx`, `BTTx`, and `BCAL` records remains unimplemented.
 
 Both `syscfg.bin` and `m1n1-syscfg.payload` are ignored by this repository.
 Keep them private and delete unneeded copies after the boot payload has been
 built.
 
-## 10. Verify the running system
+## 11. Verify the running system
 
 After booting the patched kernel and m1n1 payload, verify automatic firmware
 loading:
 
 ```sh
-dmesg | grep -E 'apple-z2|brcmfmac|Firmware: BCM4355|TxCap blob'
+dmesg | grep -E 'apple-z2|brcmfmac|Firmware: BCM4355|TxCap blob|Bluetooth: hci0'
 ip link show wlp2s0
 rfkill list
+bluetoothctl show
 ```
 
 On the validated J172, `brcmfmac` reports BCM4355/12 firmware
@@ -478,3 +563,14 @@ Station mode, WPA2, DHCP, Internet access, disconnect/reconnect, and hostapd
 AP mode have been validated. The optional cfg80211 P2P-device interface is
 not supported by the tested firmware; this does not affect station or AP
 mode.
+
+The J172 Bluetooth controller is exposed as a normal BlueZ HCI controller.
+The kernel powers it through the standard serdev path, switches the Broadcom
+controller and host UART to their runtime rates, and loads
+`brcm/BCM4355C1.hcd` automatically with `request_firmware()`. Discovery,
+pairing, reconnect, and A2DP audio have been validated through standard Linux
+userspace.
+
+Bluetooth calibration is not yet implemented. Until `BTRx`, `BTTx`, and
+`BCAL` are supported, range, transmit power, receive sensitivity, and RF
+performance must not be treated as fully calibrated or production-ready.

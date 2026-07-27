@@ -3,9 +3,11 @@
 kernel/
 touch/
 wifi/
+bluetooth/
 J172_Multitouch.mtfw
 t8010-smartio.bin
 dfrmtfw-*.bin
+BCM4355C1.hcd
 generated-wifi/
 brcmfmac4355c1-pcie.*
 __pycache__/
