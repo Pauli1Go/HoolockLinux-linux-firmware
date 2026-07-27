@@ -37,6 +37,7 @@ explicitly says to run them on the iPad.
 - Git, `make`, and a C compiler to build `makez2fw` and `hcdpack`
 - Linux running on the target iPad to read its SysCfg partition
 - root access to the target root filesystem or initramfs for installation
+- BlueZ on the running Linux system for Bluetooth control and verification
 
 Clone the repository and enter it:
 
@@ -429,6 +430,8 @@ Expected SHA-256:
 
 The profile above is tied to the tested Murata module. Do not silently reuse
 it on a device whose Wi-Fi OTP reports a different module or NVRAM profile.
+The generated HCD is the common Patchram image for that module profile; it
+does not contain this iPad's private `BTRx`, `BTTx`, or `BCAL` RF calibration.
 
 ## 9. Install the firmware
 
@@ -445,12 +448,13 @@ sudo install -m 0644 BCM4355C1.hcd \
 sudo install -m 0644 generated-wifi/brcm/* /lib/firmware/brcm/
 ```
 
-Install the normal Linux regulatory database from the distribution. On
-Debian or Ubuntu:
+Install the normal Linux regulatory database and Bluetooth userspace from the
+distribution. On Debian or Ubuntu:
 
 ```sh
 sudo apt-get update
-sudo apt-get install wireless-regdb
+sudo apt-get install wireless-regdb bluez
+sudo systemctl enable --now bluetooth.service
 ```
 
 The tested kernel has the touch, Wi-Fi, and Bluetooth drivers built in, so all
@@ -551,6 +555,8 @@ loading:
 dmesg | grep -E 'apple-z2|brcmfmac|Firmware: BCM4355|TxCap blob|Bluetooth: hci0'
 ip link show wlp2s0
 rfkill list
+test -e /sys/class/bluetooth/hci0
+systemctl --no-pager --full status bluetooth.service
 bluetoothctl show
 ```
 
@@ -569,7 +575,8 @@ The kernel powers it through the standard serdev path, switches the Broadcom
 controller and host UART to their runtime rates, and loads
 `brcm/BCM4355C1.hcd` automatically with `request_firmware()`. Discovery,
 pairing, reconnect, and A2DP audio have been validated through standard Linux
-userspace.
+userspace. `bluetoothctl` can therefore control it after a normal boot without
+a board-specific userspace loader or manual UART attachment.
 
 Bluetooth calibration is not yet implemented. Until `BTRx`, `BTTx`, and
 `BCAL` are supported, range, transmit power, receive sensitivity, and RF
