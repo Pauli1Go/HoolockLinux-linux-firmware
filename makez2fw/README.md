@@ -4,6 +4,12 @@
 SysCfg calibration into the Z2FW container loaded by HoolockLinux's
 `apple_z2` driver.
 
+For devices whose bootloader supplies several calibration properties at
+runtime, the converter can instead emit typed calibration requests. This keeps
+device-specific calibration out of the firmware file and lets m1n1 copy the
+values from Apple's live device tree. For D111, the kernel wraps those values
+in the HBPP14 calibration packet format requested by the D11 firmware.
+
 ## Build
 
 A C compiler, `make`, and `ar` are required:
@@ -14,6 +20,11 @@ make
 
 The resulting executable is `./makez2fw`.
 
+Parser behaviour is passed through an explicit `mtfw_load_options_t` object.
+The converter does not inspect or modify `HXT_*` environment variables. Its
+native HBPP14 byte order is fixed, while dynamic calibration and OTP preflight
+are explicit caller decisions.
+
 ## Usage
 
 ```sh
@@ -22,6 +33,16 @@ The resulting executable is `./makez2fw`.
   J172_Multitouch.mtfw \
   syscfg.bin \
   dfrmtfw-j172-k1f19-6.bin
+```
+
+For an iPhone 7 D111 firmware profile with dynamic calibration:
+
+```sh
+./makez2fw \
+  --dynamic-calibration \
+  'C1F5E,2' \
+  D11.mtprops \
+  dfrmtfw-d111-c1f5e-2.bin
 ```
 
 ## Origin and licensing

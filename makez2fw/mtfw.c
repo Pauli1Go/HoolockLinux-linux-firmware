@@ -57,12 +57,6 @@ static inline void mtfw_put16be(uint8_t *buf, uint16_t val)
     buf[1] = val;
 }
 
-static inline void mtfw_put16le(uint8_t *buf, uint16_t val)
-{
-    buf[0] = val;
-    buf[1] = val >> 8;
-}
-
 static inline void mtfw_put32le(uint8_t *buf, uint32_t val)
 {
     buf[0] = val;
@@ -92,17 +86,6 @@ static uint32_t mtfw_sum(uint8_t *buf, unsigned size)
 static mtfw_item_t *mtfw_item_add_regwr(mtfw_item_t ***pptail, uint32_t addr, uint32_t mask, uint32_t val)
 {
     uint8_t buf[16];
-    uint16_t csum;
-
-    if(getenv("HXT_HBPP_Z2_RMW")) {
-        mtfw_put16le(&buf[0], 0x1E33);
-        mtfw_put32le(&buf[2], addr);
-        mtfw_put32le(&buf[6], mask);
-        mtfw_put32le(&buf[10], val);
-        csum = mtfw_sum(&buf[2], 12);
-        mtfw_put16le(&buf[14], csum);
-        return mtfw_item_add(pptail, MTFW_WRITE_ACK, buf, sizeof(buf), 1);
-    }
 
     mtfw_put16be(&buf[0], 0x1E33);
     mtfw_put32xe(&buf[2], addr);
@@ -202,6 +185,7 @@ static void mtfw_copy16be(uint8_t *dst, uint8_t *src, unsigned len)
         dst[i^1] = src[i];
 }
 
+/* Takes ownership of data and releases it on every return path. */
 static mtfw_item_t *mtfw_item_add_calload(mtfw_item_t ***pptail, uint32_t addr, void *data, unsigned len)
 {
     mtfw_item_t *mtfw = mtfw_item_add(pptail, MTFW_WRITE_ACK, NULL, 16 + ((len + 3) & -4), 1);
@@ -220,29 +204,7 @@ static mtfw_item_t *mtfw_item_add_calload(mtfw_item_t ***pptail, uint32_t addr, 
     mtfw_put16be(&buf[10], mtfw_sum(&buf[4], 6));
     mtfw_copy16be(&buf[12], data, len);
     mtfw_put32xe(&buf[12 + ((len + 3) & -4)], mtfw_sum(data, len));
-
-    return mtfw;
-}
-
-static mtfw_item_t *mtfw_item_add_calload_z2(mtfw_item_t ***pptail, uint32_t addr, void *data, unsigned len)
-{
-    mtfw_item_t *mtfw = mtfw_item_add(pptail, MTFW_WRITE_ACK, NULL, 10 + len + 4, 1);
-    uint8_t *buf;
-    uint16_t hdr_sum;
-
-    if(!mtfw) {
-        free(data);
-        return NULL;
-    }
-    buf = (uint8_t *)mtfw->data;
-
-    mtfw_put16le(&buf[0], 0x3001);
-    mtfw_put16le(&buf[2], (len + 3) >> 2);
-    mtfw_put32le(&buf[4], addr);
-    hdr_sum = mtfw_sum(&buf[2], 6);
-    mtfw_put16le(&buf[8], hdr_sum);
-    memcpy(&buf[10], data, len);
-    mtfw_put32le(&buf[10 + len], mtfw_sum(data, len));
+    free(data);
 
     return mtfw;
 }
@@ -256,6 +218,29 @@ static void *mtfw_request_cal(const char *syscfg, const char *name, unsigned lon
     return NULL;
 }
 
+static int mtfw_dynamic_calibration_provider(const char *name, unsigned *provider)
+{
+    static const struct {
+        const char *name;
+        unsigned provider;
+    } providers[] = {
+        { "multi-touch-calibration", MTFW_CAL_MULTI_TOUCH },
+        { "orb-gap-cal", MTFW_CAL_ORB_GAP },
+        { "orb-force-cal", MTFW_CAL_ORB_FORCE },
+        { "shape-dynamic-accel-cal", MTFW_CAL_SHAPE_ACCEL },
+    };
+    unsigned i;
+
+    for(i=0; i<sizeof(providers)/sizeof(providers[0]); i++) {
+        if(!strcmp(providers[i].name, name)) {
+            *provider = providers[i].provider;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static int mtfw_item_add_payload(mtfw_item_t ***pptail, uint32_t addr, void *data, unsigned long len)
 {
     if(!data || !len) {
@@ -264,19 +249,8 @@ static int mtfw_item_add_payload(mtfw_item_t ***pptail, uint32_t addr, void *dat
         return 0;
     }
 
-    if(getenv("HXT_HBPP_Z2_STYLE")) {
-        if(!mtfw_item_add_calload_z2(pptail, addr, data, len)) {
-            free(data);
-            return 0;
-        }
-        fprintf(stderr, "HBPP payload: load %lu bytes at 0x%x (z2 header).\n", len, addr);
-        return 1;
-    }
-
-    if(!mtfw_item_add_calload(pptail, addr, data, len)) {
-        free(data);
+    if(!mtfw_item_add_calload(pptail, addr, data, len))
         return 0;
-    }
 
     fprintf(stderr, "HBPP payload: load %lu bytes at 0x%x.\n", len, addr);
     return 1;
@@ -732,15 +706,31 @@ static void mtfw_config_get_uint(mtfw_config_t *cfg, epelem_t dict,
                                  unsigned *dst)
 {
     epelem_t elem;
+    const char *string;
+    char *end;
+    unsigned long value;
 
     if(!dict)
         return;
 
     elem = eplist_dict_find(dict, key, EPLIST_INTEGER);
+    if(elem) {
+        *dst = eplist_get_integer(elem);
+        cfg->valid_mask |= valid_bit;
+        return;
+    }
+
+    elem = eplist_dict_find(dict, key, EPLIST_STRING);
     if(!elem)
         return;
+    string = eplist_get_string(elem);
+    if(!string || !*string)
+        return;
+    value = strtoul(string, &end, 0);
+    if(*end || value > UINT32_MAX)
+        return;
 
-    *dst = eplist_get_integer(elem);
+    *dst = value;
     cfg->valid_mask |= valid_bit;
 }
 
@@ -774,7 +764,7 @@ static void mtfw_parse_hbpp_config(epelem_t root, mtfw_config_t *cfg)
 
     config = eplist_dict_find(root, "Config", EPLIST_DICT);
     if(!config)
-        return;
+        config = root;
 
     mtfw_config_get_uint(cfg, config, "Min DMA Transfer Size",
                          MTFW_CONFIG_MIN_DMA_VALID,
@@ -818,7 +808,8 @@ static void mtfw_parse_hbpp_config(epelem_t root, mtfw_config_t *cfg)
 }
 
 static mtfw_item_t *mtfw_load_hbpp_firmware(epelem_t seq, const char *syscfg,
-                                            const mtfw_config_t *cfg)
+                                            const mtfw_config_t *cfg,
+                                            const mtfw_load_options_t *options)
 {
     mtfw_item_t *head = NULL, **ptail = &head;
     epelem_t seql, elem;
@@ -838,7 +829,7 @@ static mtfw_item_t *mtfw_load_hbpp_firmware(epelem_t seq, const char *syscfg,
     if(!mtfw_item_add(&ptail, MTFW_WRITE, "\x1A\xA1\x18\xE1", 4, 1))
         goto fail;
 
-    if(getenv("HXT_HBPP_OTP_PREFLIGHT"))
+    if(options->otp_preflight)
         if(!mtfw_item_add_otp_preflight(&ptail, cfg))
             goto fail;
 
@@ -912,8 +903,11 @@ fail:
     return NULL;
 }
 
-mtfw_item_t *mtfw_load_firmware(const char *pers, const char *fname, const char *syscfg)
+mtfw_item_t *mtfw_load_firmware(const char *pers, const char *fname,
+                                const char *syscfg,
+                                const mtfw_load_options_t *options)
 {
+    static const mtfw_load_options_t default_options;
     mtfw_item_t *head = NULL, **ptail = &head;
     FILE *f;
     eplist_t epl = NULL;
@@ -921,9 +915,12 @@ mtfw_item_t *mtfw_load_firmware(const char *pers, const char *fname, const char 
     mtfw_config_t raw_config;
     void *bits, *fwcfgbits = NULL;
     unsigned long len;
-    unsigned long long addr, mask, val;
+    unsigned long long addr, mask, val, max_size;
     const char *acts;
     int mode, i;
+
+    if(!options)
+        options = &default_options;
 
     mtfw_parse_raw_hbpp_config(fname, &raw_config);
 
@@ -949,7 +946,7 @@ mtfw_item_t *mtfw_load_firmware(const char *pers, const char *fname, const char 
 
             if(!config.valid_mask)
                 mtfw_parse_hbpp_config(root, &config);
-            head = mtfw_load_hbpp_firmware(fw, syscfg, &config);
+            head = mtfw_load_hbpp_firmware(fw, syscfg, &config, options);
             eplist_free(epl);
             return head;
         } else {
@@ -1066,6 +1063,13 @@ mtfw_item_t *mtfw_load_firmware(const char *pers, const char *fname, const char 
 
         root = eplist_root(epl);
 
+        if(!raw_config.valid_mask)
+            mtfw_parse_hbpp_config(root, &raw_config);
+        if(raw_config.valid_mask &&
+           !mtfw_item_add(&ptail, MTFW_SET_CONFIG, &raw_config,
+                          sizeof(raw_config), 1))
+            goto fail;
+
         seq = eplist_dict_find(root, "Calibration Sequence", EPLIST_ARRAY);
         if(!seq) {
             fprintf(stderr, "Failed to find calibration sequence.\n");
@@ -1089,13 +1093,46 @@ mtfw_item_t *mtfw_load_firmware(const char *pers, const char *fname, const char 
                 fprintf(stderr, "Incomplete item in calibration sequence array (no provider).\n");
                 goto fail;
             }
-            bits = mtfw_request_cal(syscfg, acts, &len);
-            if(!bits) {
-                fprintf(stderr, "Calibration sequence provider unavailable (%s).\n", acts);
-                goto fail;
+            if(options->dynamic_calibration) {
+                mtfw_calibration_t calibration;
+
+                fw = eplist_dict_find(seql, "Max Size", EPLIST_INTEGER);
+                if(!fw) {
+                    fprintf(stderr,
+                            "Dynamic calibration has no maximum size (%s).\n",
+                            acts);
+                    goto fail;
+                }
+                max_size = eplist_get_integer(fw);
+                if(!addr || addr > UINT32_MAX || !max_size ||
+                   max_size > UINT32_MAX ||
+                   !mtfw_dynamic_calibration_provider(acts,
+                                                      &calibration.provider)) {
+                    fprintf(stderr,
+                            "Unsupported dynamic calibration (%s, address 0x%llx, max %llu).\n",
+                            acts, addr, max_size);
+                    goto fail;
+                }
+                calibration.address = addr;
+                calibration.max_size = max_size;
+                if(!mtfw_item_add(&ptail, MTFW_SEND_CALIBRATION,
+                                  &calibration, sizeof(calibration), 1))
+                    goto fail;
+                fprintf(stderr,
+                        "Dynamic calibration: %s provider=%u address=0x%x max=%u.\n",
+                        acts, calibration.provider, calibration.address,
+                        calibration.max_size);
+            } else {
+                bits = mtfw_request_cal(syscfg, acts, &len);
+                if(!bits) {
+                    fprintf(stderr,
+                            "Calibration sequence provider unavailable (%s).\n",
+                            acts);
+                    goto fail;
+                }
+                if(!mtfw_item_add_calload(&ptail, addr, bits, len))
+                    goto fail;
             }
-            if(!mtfw_item_add_calload(&ptail, addr, bits, len))
-                goto fail;
             seql = eplist_next(seql);
         }
 

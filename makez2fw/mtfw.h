@@ -7,12 +7,21 @@
 #ifndef _MTFW_H
 #define _MTFW_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #define MTFW_WRITE      1
 #define MTFW_WRITE_ACK  2
 #define MTFW_WAIT_IRQ   3
 #define MTFW_SET_TYPE   4
 #define MTFW_SET_CONFIG 5
 #define MTFW_RAW_XFER   6
+#define MTFW_SEND_CALIBRATION 7
+
+#define MTFW_CAL_MULTI_TOUCH 0
+#define MTFW_CAL_ORB_GAP     1
+#define MTFW_CAL_ORB_FORCE   2
+#define MTFW_CAL_SHAPE_ACCEL 3
 
 #define MTFW_RAW_XFER_RX_BIT_REVERSE (1u << 0)
 
@@ -62,6 +71,19 @@ typedef struct mtfw_item {
     struct mtfw_item *next;
 } mtfw_item_t;
 
-mtfw_item_t *mtfw_load_firmware(const char *pers, const char *fname, const char *syscfg);
+typedef struct mtfw_calibration {
+    uint32_t address;
+    uint32_t max_size;
+    uint32_t provider;
+} mtfw_calibration_t;
+
+typedef struct mtfw_load_options {
+    bool dynamic_calibration;
+    bool otp_preflight;
+} mtfw_load_options_t;
+
+mtfw_item_t *mtfw_load_firmware(const char *pers, const char *fname,
+                                const char *syscfg,
+                                const mtfw_load_options_t *options);
 
 #endif

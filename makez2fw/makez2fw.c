@@ -19,6 +19,7 @@
 #define LOAD_COMMAND_WAIT_IRQ        3U
 #define LOAD_COMMAND_SET_CONFIG      4U
 #define LOAD_COMMAND_RAW_XFER        5U
+#define LOAD_COMMAND_SEND_CALIBRATION_V2 6U
 
 #define Z2FW_CONFIG_WORDS            11U
 
@@ -91,36 +92,52 @@ int main(int argc, char **argv)
     mtfw_item_t *items, *item;
     FILE *out;
     unsigned config_count = 0, init_count = 0, blob_count = 0, wait_count = 0;
-    unsigned raw_count = 0, skipped = 0;
+    unsigned raw_count = 0, calibration_count = 0, skipped = 0;
     uint32_t wait_timeout_ms = 1000;
     uint64_t payload_bytes = 0;
     unsigned char wait_buf[4];
+    const char *personality, *mtfw, *syscfg, *output;
+    int dynamic_calibration;
+    mtfw_load_options_t load_options;
 
     if(argc != 5) {
         fprintf(stderr,
-                "usage: makez2fw <personality> <mtfw> <syscfg> <out-fw>\n");
+                "usage: makez2fw <personality> <mtfw> <syscfg> <out-fw>\n"
+                "       makez2fw --dynamic-calibration <personality> <mtfw> <out-fw>\n");
         return 1;
+    }
+
+    dynamic_calibration = !strcmp(argv[1], "--dynamic-calibration");
+    if(dynamic_calibration) {
+        personality = argv[2];
+        mtfw = argv[3];
+        syscfg = NULL;
+        output = argv[4];
+    } else {
+        personality = argv[1];
+        mtfw = argv[2];
+        syscfg = argv[3];
+        output = argv[4];
     }
 
     /*
      * The raw MTFW loader's native HBPP14 construction matches Apple's
-     * preconstructed OSData stream.  Do not inherit the old experimental
-     * Z2 byte-order overrides from the caller's environment.
+     * preconstructed OSData stream. OTP preflight is an explicit converter
+     * policy; no parser behavior is inherited from the process environment.
      */
-    unsetenv("HXT_HBPP_Z2_STYLE");
-    unsetenv("HXT_HBPP_Z2_RMW");
-    setenv("HXT_HBPP_OTP_PREFLIGHT", "1", 1);
+    load_options.dynamic_calibration = dynamic_calibration;
+    load_options.otp_preflight = true;
 
-    items = mtfw_load_firmware(argv[1], argv[2], argv[3]);
+    items = mtfw_load_firmware(personality, mtfw, syscfg, &load_options);
     if(!items) {
         fprintf(stderr, "makez2fw: failed loading MTFW sequence\n");
         return 1;
     }
 
-    out = fopen(argv[4], "wb");
+    out = fopen(output, "wb");
     if(!out) {
         fprintf(stderr, "makez2fw: failed opening %s: %s\n",
-                argv[4], strerror(errno));
+                output, strerror(errno));
         return 1;
     }
 
@@ -172,6 +189,25 @@ int main(int argc, char **argv)
             raw_count++;
             payload_bytes += item->size;
             break;
+        case MTFW_SEND_CALIBRATION:
+            if(item->data && item->size == sizeof(mtfw_calibration_t)) {
+                const mtfw_calibration_t *cal =
+                    (const mtfw_calibration_t *)item->data;
+                unsigned char cal_buf[12];
+
+                put_le32(cal_buf, cal->address);
+                put_le32(cal_buf + 4, cal->max_size);
+                put_le32(cal_buf + 8, cal->provider);
+                if(write_command(out, LOAD_COMMAND_SEND_CALIBRATION_V2,
+                                 cal_buf, sizeof(cal_buf)))
+                    goto write_fail;
+                calibration_count++;
+            } else {
+                fprintf(stderr, "makez2fw: invalid calibration item\n");
+                fclose(out);
+                return 1;
+            }
+            break;
         case MTFW_SET_TYPE:
             skipped++;
             break;
@@ -190,15 +226,15 @@ int main(int argc, char **argv)
     }
 
     fprintf(stderr,
-            "makez2fw: wrote %s configs=%u init=%u blobs=%u raw=%u waits=%u skipped=%u payload=%llu bytes\n",
-            argv[4], config_count, init_count, blob_count, raw_count,
-            wait_count, skipped,
+            "makez2fw: wrote %s configs=%u init=%u blobs=%u raw=%u calibrations=%u waits=%u skipped=%u payload=%llu bytes\n",
+            output, config_count, init_count, blob_count, raw_count,
+            calibration_count, wait_count, skipped,
             (unsigned long long)payload_bytes);
     return 0;
 
 write_fail:
     fprintf(stderr, "makez2fw: failed writing %s: %s\n",
-            argv[4], strerror(errno));
+            output, strerror(errno));
     fclose(out);
     return 1;
 }
