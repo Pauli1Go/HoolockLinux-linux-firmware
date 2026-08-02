@@ -4,13 +4,16 @@ This document describes how to reproduce the Apple firmware used by
 HoolockLinux on the iPhone 7 Plus (`iPhone9,4`, T8010/D111). The documented
 combination has been booted on hardware. The touchscreen has been verified
 with physical touch input, and BCM4355 station-mode Wi-Fi has been verified
-with a real WPA2 connection and data transfer.
+with a real WPA2 connection and data transfer. The BCM4355C0 Bluetooth
+controller has been verified with automatic Patchram loading, its
+device-specific address, discovery, connection, and A2DP audio.
 
 The completed installation contains:
 
 ```text
 /lib/firmware/apple/t8010-smartio.bin
 /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+/lib/firmware/brcm/BCM.apple,d111.hcd
 /lib/firmware/brcm/brcmfmac4355-pcie.bin
 /lib/firmware/brcm/brcmfmac4355-pcie.clm_blob
 /lib/firmware/brcm/brcmfmac4355-pcie.txcap_blob
@@ -22,15 +25,17 @@ device-specific calibration. The commands below reproduce the common firmware
 from one Apple restore image. The generated D111 touch container does not
 contain device-specific calibration: the supported m1n1 loader copies touch
 calibration from Apple's live Device Tree at every boot. Wi-Fi calibration is
-provided separately from the same iPhone's private SysCfg.
+provided separately from the same iPhone's private SysCfg. The Bluetooth
+device address comes from `BMac` in that same private SysCfg; the common HCD
+file does not contain it.
 
 This guide is specific to the iPhone 7 Plus D111. The smaller iPhone 7 uses
 D10 and a different multitouch profile; D10 has not been validated by the
 current HoolockLinux port and must not be treated as covered by these steps.
-Bluetooth, audio, and other iPhone firmware are outside the scope of the
-currently validated port. Wi-Fi access-point mode is also not supported: a
-hotspot reactivation caused a full system freeze during bring-up. The
-validated Wi-Fi scope is station mode only.
+Other iPhone audio firmware remains outside the scope of the currently
+validated port. Wi-Fi access-point mode is also not supported: a hotspot
+reactivation caused a full system freeze during bring-up. The validated Wi-Fi
+scope is station mode only.
 
 Commands are run from the repository root unless stated otherwise.
 
@@ -40,10 +45,11 @@ Commands are run from the repository root unless stated otherwise.
 - Python 3.11
 - `curl`
 - `shasum` on macOS or an equivalent SHA-256 tool
-- Git, `make`, and a C compiler
+- Git, `make`, and a C compiler to build `makez2fw` and `hcdpack`
 - a D111-capable HoolockLinux kernel and m1n1 loader
 - root access to the target root filesystem or initramfs
 - `initramfs-tools` when using the Debian installation method below
+- BlueZ on the running Linux system for Bluetooth control and verification
 
 Clone the repository and enter it:
 
@@ -342,7 +348,80 @@ identical bytes, but all four names must remain available because the
 firmware-request name includes the detected PRNL profile. Do not substitute
 the iPad 7 `rudderb` firmware or invent a fixed board-type override.
 
-## 7. Install the firmware
+## 7. Extract the BCM4355C0 Bluetooth firmware
+
+The BCM4355C0 Bluetooth Patchram image is embedded in `/usr/sbin/BlueTool` in
+the same iOS filesystem. Extract that file from the IPSW already verified in
+section 1:
+
+```sh
+ipsw extract \
+  --files \
+  --pattern '^usr/sbin/BlueTool$' \
+  --output bluetooth \
+  iPhone_5.5_P3_15.8.4_19H390_Restore.ipsw
+
+BLUETOOL='bluetooth/19H390__iPhone9,2_4/usr/sbin/BlueTool'
+test -f "$BLUETOOL"
+```
+
+Verify the extracted binary:
+
+```sh
+test "$(wc -c < "$BLUETOOL" | tr -d ' ')" = 9710640
+shasum -a 256 "$BLUETOOL"
+```
+
+Expected SHA-256:
+
+```text
+78115abe9705d30596768231d2f1587bf68670f6a7a2d1db7d88620aa54cca8d
+```
+
+Build the `hcdpack` extractor from the pinned Project Sandcastle revision:
+
+```sh
+git clone https://github.com/corellium/projectsandcastle.git
+git -C projectsandcastle checkout \
+  03db9c6ae04141eb940f3b9f56d446f50d57fadf
+make -C projectsandcastle/hcdpack \
+  CFLAGS='-O2 -Wall -I. -D_DARWIN_C_SOURCE'
+```
+
+The extra feature macro keeps `strdup()` visible when building this revision
+with Apple's current Clang and is harmless on Linux.
+
+The validated iPhone reports BCM4355 revision C0 with the Olaf PRNL `m-5.7`
+Murata profile. Extract exactly that Patchram image using the OTP strings:
+
+```sh
+projectsandcastle/hcdpack/hcdpack \
+  "$BLUETOOL" \
+  'C-4355__s-C0' \
+  olaf \
+  'M-PRNL_V-m__m-5.7' \
+  BCM.apple,d111.hcd
+```
+
+Verify the generated firmware:
+
+```sh
+test "$(wc -c < BCM.apple,d111.hcd | tr -d ' ')" = 91023
+shasum -a 256 BCM.apple,d111.hcd
+```
+
+Expected SHA-256:
+
+```text
+4b5174cdfce25ae2e407a9f934866546ce204a202925074b32c5dc7cf96db714
+```
+
+The profile is tied to the validated Murata module. Do not silently reuse it
+on a D111 whose Wi-Fi OTP identifies the USI variant or another NVRAM profile.
+The generated HCD is the common Patchram image and contains neither this
+iPhone's private `BMac` address nor its `BTRx`, `BTTx`, or `BCAL` RF records.
+
+## 8. Install the firmware
 
 Install the common Apple and Broadcom files into the target root filesystem
 using the exact names requested by the Device Tree and drivers:
@@ -353,52 +432,32 @@ sudo install -m 0644 t8010-smartio.bin \
   /lib/firmware/apple/t8010-smartio.bin
 sudo install -m 0644 dfrmtfw-d111-c1f5e-2.bin \
   /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+sudo install -m 0644 BCM.apple,d111.hcd \
+  /lib/firmware/brcm/BCM.apple,d111.hcd
 sudo install -m 0644 generated-wifi/brcm/* /lib/firmware/brcm/
 ```
 
-Install the normal Linux regulatory database as well. On Debian:
+Install the normal Linux regulatory database and Bluetooth userspace as well.
+On Debian:
 
 ```sh
 sudo apt-get update
-sudo apt-get install wireless-regdb
+sudo apt-get install wireless-regdb bluez
+sudo systemctl enable --now bluetooth.service
 ```
 
-The validated kernel builds the Apple Z2, SmartIO, and brcmfmac drivers into
-the kernel, so their firmware and the regulatory database must be present in
-the early initramfs. Generic dependency detection can omit firmware for
-built-in drivers. On Debian, create an `initramfs-tools` hook containing:
+The validated kernel builds the Apple Z2, SmartIO, brcmfmac, and Bluetooth
+UART drivers into the kernel, so all firmware and the regulatory database
+must be present in the early initramfs. In particular, the Bluetooth UART
+probes before `switch_root`; finding the HCD only in the root filesystem is
+too late. Generic dependency detection can omit firmware for built-in
+drivers. On Debian, install the provided `initramfs-tools` hook and rebuild
+the initramfs:
 
 ```sh
-#!/bin/sh
-set -e
-
-case "$1" in
-prereqs)
-    exit 0
-    ;;
-esac
-
-. /usr/share/initramfs-tools/hook-functions
-
-copy_file firmware /lib/firmware/apple/t8010-smartio.bin
-copy_file firmware /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
-copy_file firmware /lib/firmware/brcm/brcmfmac4355-pcie.bin
-copy_file firmware /lib/firmware/brcm/brcmfmac4355-pcie.clm_blob
-copy_file firmware /lib/firmware/brcm/brcmfmac4355-pcie.txcap_blob
-
-for firmware in /lib/firmware/brcm/brcmfmac4355-pcie.apple,d111-PRNL-*.txt; do
-    copy_file firmware "$firmware"
-done
-
-copy_file firmware /lib/firmware/regulatory.db
-copy_file firmware /lib/firmware/regulatory.db.p7s
-```
-
-Save it as `/etc/initramfs-tools/hooks/hoolock-iphone7-firmware`, make it
-executable, and rebuild the initramfs:
-
-```sh
-sudo chmod 0755 /etc/initramfs-tools/hooks/hoolock-iphone7-firmware
+sudo install -m 0755 \
+  initramfs-tools/hooks/hoolock-iphone7-firmware \
+  /etc/initramfs-tools/hooks/hoolock-iphone7-firmware
 sudo update-initramfs -u
 ```
 
@@ -409,6 +468,7 @@ Debian initramfs with:
 ```sh
 test -s /lib/firmware/apple/t8010-smartio.bin
 test -s /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+test -s /lib/firmware/brcm/BCM.apple,d111.hcd
 test "$(find /lib/firmware/brcm -maxdepth 1 \
   -name 'brcmfmac4355-pcie*' -type f | wc -l | tr -d ' ')" = 7
 test -s /lib/firmware/regulatory.db
@@ -420,6 +480,8 @@ lsinitramfs "$INITRAMFS" | \
   grep -q 'apple/t8010-smartio.bin$'
 lsinitramfs "$INITRAMFS" | \
   grep -q 'apple/dfrmtfw-d111-c1f5e-2.bin$'
+lsinitramfs "$INITRAMFS" | \
+  grep -q 'brcm/BCM.apple,d111.hcd$'
 test "$(lsinitramfs "$INITRAMFS" | \
   grep -c 'brcm/brcmfmac4355-pcie')" = 7
 lsinitramfs "$INITRAMFS" | grep -q 'regulatory.db$'
@@ -430,7 +492,7 @@ If the initramfs is built on another machine, verify its embedded files by
 extracting it and comparing the SHA-256 values above. Finding the files only
 in the root filesystem is not sufficient for a built-in driver.
 
-## 8. Use the D111-capable m1n1 loader
+## 9. Use the D111-capable m1n1 loader
 
 The firmware container contains requests for calibration, not the private
 calibration bytes themselves. Boot it with the D111-capable `idevice` branch
@@ -460,7 +522,8 @@ command.
 Wi-Fi uses a separate calibration path. The common files under
 `/lib/firmware/brcm` do not contain this iPhone's MAC address or RF
 calibration. The patched loader supplies the private `WMac` and `WCAL` values
-from the same iPhone's SysCfg through Linux NVMEM.
+through Linux NVMEM and the `BMac` value as Bluetooth `local-bd-address`, all
+from the same iPhone's SysCfg.
 
 The following read-only step runs on the target iPhone under Linux. On the
 validated storage layout, SysCfg is exposed as `/dev/nvme0n3`. Confirm both
@@ -524,10 +587,16 @@ test "$(wc -c < m1n1-syscfg.payload | tr -d ' ')" = 131087
 
 Include this component exactly once in a payload for the patched D111 m1n1
 loader. The loader reserves a private copy, publishes the `WMac` and `WCAL`
-NVMEM cells, and connects them to the BCM4355 endpoint. Do not install
+NVMEM cells, connects them to the BCM4355 Wi-Fi endpoint, and writes `BMac`
+to the Bluetooth node in the byte order expected by Linux. Do not install
 `syscfg.bin` under `/lib/firmware`, do not use an iPad or another iPhone's
 dump, and never publish its hash or contents. Both private filenames are
 already ignored by this repository.
+
+The public HCD file and the private SysCfg records serve different purposes.
+The HCD provides Patchram code; `BMac` provides the device address. Private
+Bluetooth RF calibration from `BTRx`, `BTTx`, and `BCAL` is not currently
+consumed by Linux.
 
 After confirming the local copy, remove the temporary target-side file:
 
@@ -540,18 +609,21 @@ firmware TRAP during bring-up. Do not treat a created `wlp2s0` interface as a
 successful test unless platform calibration was accepted and the firmware
 remains stable.
 
-## 9. Verify the running system
+## 10. Verify the running system
 
 After booting the matching kernel, m1n1, Device Tree, and initramfs, verify
 the live binding:
 
 ```sh
-dmesg | grep -E 'apple-z2|SmartIO|touchscreen|brcmfmac|Firmware: BCM4355|Calibration blob|TxCap'
+dmesg | grep -E 'apple-z2|SmartIO|touchscreen|brcmfmac|Firmware: BCM4355|Calibration blob|TxCap|Bluetooth: hci0'
 readlink /sys/bus/spi/devices/spi0.0/driver
 grep -A6 -B1 'iPhone9,4 Touchscreen' /proc/bus/input/devices
 test "$(basename "$(readlink /sys/bus/pci/devices/0000:02:00.0/driver)")" = \
   brcmfmac
 ip link show wlp2s0
+test -e /sys/class/bluetooth/hci0
+systemctl --no-pager --full status bluetooth.service
+bluetoothctl show
 ```
 
 Expected results include:
@@ -568,6 +640,7 @@ firmware was installed:
 
 ```sh
 sha256sum /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+sha256sum /lib/firmware/brcm/BCM.apple,d111.hcd
 sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.bin
 sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.clm_blob
 sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.txcap_blob
@@ -595,3 +668,17 @@ physical multitouch input was confirmed without Z2, SPI, or touchscreen
 errors. BCM4355 station mode remained firmware-crash-free, associated through
 NetworkManager, and transferred data successfully. The documented 19H390
 Wi-Fi sources are byte-identical to the files used for that test.
+
+The D111 Bluetooth controller is exposed as a normal BlueZ HCI controller.
+The kernel powers it through the standard serdev path, switches the Broadcom
+controller and host UART to their runtime rates, and loads
+`brcm/BCM.apple,d111.hcd` automatically through `request_firmware()`. On the
+validated boot it reported `BCM4355C0 Olaf MUR MCC`, firmware build 1324, used
+the device-specific address supplied from SysCfg, and had no HCI RX/TX errors.
+Discovery, connection, and A2DP audio with AirPods were validated through
+ordinary BlueZ userspace without `hciattach`, a manual driver rebind, or a
+firmware-path override.
+
+Bluetooth RF calibration is not yet implemented. Until `BTRx`, `BTTx`, and
+`BCAL` are consumed, range, transmit power, receive sensitivity, and RF
+performance must not be treated as fully calibrated.

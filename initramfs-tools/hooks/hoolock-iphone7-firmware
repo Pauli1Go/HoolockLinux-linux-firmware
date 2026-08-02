@@ -1,0 +1,51 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+
+set -e
+
+PREREQ=""
+
+prereqs()
+{
+	echo "$PREREQ"
+}
+
+case "$1" in
+prereqs)
+	prereqs
+	exit 0
+	;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_required_firmware()
+{
+	if [ ! -f "$1" ]; then
+		echo "Missing required HoolockLinux firmware: $1" >&2
+		exit 1
+	fi
+
+	copy_file firmware "$1"
+}
+
+copy_required_firmware /lib/firmware/apple/t8010-smartio.bin
+copy_required_firmware /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+copy_required_firmware /lib/firmware/brcm/BCM.apple,d111.hcd
+copy_required_firmware /lib/firmware/regulatory.db
+copy_required_firmware /lib/firmware/regulatory.db.p7s
+
+count=0
+for firmware in /lib/firmware/brcm/brcmfmac4355-pcie*; do
+	if [ ! -f "$firmware" ]; then
+		continue
+	fi
+
+	copy_file firmware "$firmware"
+	count=$((count + 1))
+done
+
+if [ "$count" -ne 7 ]; then
+	echo "Expected 7 D111 brcmfmac files, found $count" >&2
+	exit 1
+fi
