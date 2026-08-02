@@ -2,26 +2,35 @@
 
 This document describes how to reproduce the Apple firmware used by
 HoolockLinux on the iPhone 7 Plus (`iPhone9,4`, T8010/D111). The documented
-combination has been booted on hardware and the touchscreen has been verified
-with physical touch input.
+combination has been booted on hardware. The touchscreen has been verified
+with physical touch input, and BCM4355 station-mode Wi-Fi has been verified
+with a real WPA2 connection and data transfer.
 
 The completed installation contains:
 
 ```text
 /lib/firmware/apple/t8010-smartio.bin
 /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+/lib/firmware/brcm/brcmfmac4355-pcie.bin
+/lib/firmware/brcm/brcmfmac4355-pcie.clm_blob
+/lib/firmware/brcm/brcmfmac4355-pcie.txcap_blob
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,d111-PRNL-*.txt
 ```
 
-This repository does not distribute either Apple firmware file. The commands
-below reproduce both from one Apple restore image. The generated D111
-container does not contain device-specific calibration: the supported m1n1
-loader copies that data from Apple's live Device Tree at every boot.
+This repository does not distribute Apple firmware, Wi-Fi NVRAM, or
+device-specific calibration. The commands below reproduce the common firmware
+from one Apple restore image. The generated D111 touch container does not
+contain device-specific calibration: the supported m1n1 loader copies touch
+calibration from Apple's live Device Tree at every boot. Wi-Fi calibration is
+provided separately from the same iPhone's private SysCfg.
 
 This guide is specific to the iPhone 7 Plus D111. The smaller iPhone 7 uses
 D10 and a different multitouch profile; D10 has not been validated by the
 current HoolockLinux port and must not be treated as covered by these steps.
-Wi-Fi, Bluetooth, audio, and other iPhone firmware are also outside the scope
-of the currently validated port.
+Bluetooth, audio, and other iPhone firmware are outside the scope of the
+currently validated port. Wi-Fi access-point mode is also not supported: a
+hotspot reactivation caused a full system freeze during bring-up. The
+validated Wi-Fi scope is station mode only.
 
 Commands are run from the repository root unless stated otherwise.
 
@@ -226,23 +235,138 @@ The converter should report one configuration and four calibration requests:
 The source and both generated files are derived from Apple firmware. Do not
 commit or redistribute them.
 
-## 5. Install the firmware
+## 5. Extract the D111 BCM4355 Wi-Fi source files
 
-Install both files into the target root filesystem using the exact names
-requested by the Device Tree and drivers:
+The D111 Apple Device Tree identifies the Wi-Fi chipset as `4355` and its
+module instance as `olaf`. The matching files are stored in the same iOS
+15.8.4 filesystem under:
+
+```text
+usr/share/firmware/wifi/C-4355__s-C0/
+```
+
+Extract only the seven files needed by the available D111 PRNL profiles from
+the same IPSW already downloaded in section 1:
 
 ```sh
-sudo install -d /lib/firmware/apple
+ipsw extract \
+  --files \
+  --pattern '(^|/)usr/share/firmware/wifi/C-4355__s-C0/(olaf\.(trx|clmb|txcb)|P-olaf_M-PRNL_V-(m__m-(5\.3|5\.7)|u__m-(5\.3|5\.9))\.txt)$' \
+  --output wifi \
+  iPhone_5.5_P3_15.8.4_19H390_Restore.ipsw
+```
+
+Set and verify the extracted source directory:
+
+```sh
+WIFI_SOURCE='wifi/19H390__iPhone9,2_4/usr/share/firmware/wifi/C-4355__s-C0'
+test -d "$WIFI_SOURCE"
+test "$(find "$WIFI_SOURCE" -maxdepth 1 -type f | wc -l | tr -d ' ')" = 7
+```
+
+Verify every source before renaming or installing it:
+
+| Source file | Size | SHA-256 |
+| --- | ---: | --- |
+| `olaf.trx` | 746961 | `420531da4f43040bdc851e2043e73ac657db0883406e607afcaef7cfbbfc82ba` |
+| `olaf.clmb` | 9248 | `fa99d9332574a11d8ff8c675474b47f1af7c3e7333e7acb9450dca11ab52c4d4` |
+| `olaf.txcb` | 632 | `1b06fbc502499af122d03a7daff97c03384d49feb0fa2717f0b62f3d2d213345` |
+| `P-olaf_M-PRNL_V-m__m-5.3.txt` | 5170 | `a4dd05f5a6bb76018ac3d595b7193451cbdc1ab291ff46dc70a09e989ea31251` |
+| `P-olaf_M-PRNL_V-m__m-5.7.txt` | 5170 | `a4dd05f5a6bb76018ac3d595b7193451cbdc1ab291ff46dc70a09e989ea31251` |
+| `P-olaf_M-PRNL_V-u__m-5.3.txt` | 5168 | `85acf1e7dfb15c65daf329105860aac7b05c955933eb0291c37d4ce1859c8dd0` |
+| `P-olaf_M-PRNL_V-u__m-5.9.txt` | 5168 | `85acf1e7dfb15c65daf329105860aac7b05c955933eb0291c37d4ce1859c8dd0` |
+
+These seven files match byte-for-byte the copies used during the successful
+station-mode hardware test. A second IPSW is therefore neither needed nor
+used by this guide.
+
+## 6. Stage the Wi-Fi firmware for brcmfmac
+
+Apple and Linux use different names for the same data:
+
+| Apple source | brcmfmac destination |
+| --- | --- |
+| `olaf.trx` | `brcmfmac4355-pcie.bin` |
+| `olaf.clmb` | `brcmfmac4355-pcie.clm_blob` |
+| `olaf.txcb` | `brcmfmac4355-pcie.txcap_blob` |
+| `P-olaf_M-PRNL_V-m__m-5.3.txt` | `brcmfmac4355-pcie.apple,d111-PRNL-m-5.3.txt` |
+| `P-olaf_M-PRNL_V-m__m-5.7.txt` | `brcmfmac4355-pcie.apple,d111-PRNL-m-5.7.txt` |
+| `P-olaf_M-PRNL_V-u__m-5.3.txt` | `brcmfmac4355-pcie.apple,d111-PRNL-u-5.3.txt` |
+| `P-olaf_M-PRNL_V-u__m-5.9.txt` | `brcmfmac4355-pcie.apple,d111-PRNL-u-5.9.txt` |
+
+Create a new staging tree with the exact names requested by modern
+`brcmfmac` for root compatible `apple,d111`:
+
+```sh
+test ! -e generated-wifi
+install -d generated-wifi/brcm
+install -m 0644 "$WIFI_SOURCE/olaf.trx" \
+  generated-wifi/brcm/brcmfmac4355-pcie.bin
+install -m 0644 "$WIFI_SOURCE/olaf.clmb" \
+  generated-wifi/brcm/brcmfmac4355-pcie.clm_blob
+install -m 0644 "$WIFI_SOURCE/olaf.txcb" \
+  generated-wifi/brcm/brcmfmac4355-pcie.txcap_blob
+install -m 0644 "$WIFI_SOURCE/P-olaf_M-PRNL_V-m__m-5.3.txt" \
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,d111-PRNL-m-5.3.txt
+install -m 0644 "$WIFI_SOURCE/P-olaf_M-PRNL_V-m__m-5.7.txt" \
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,d111-PRNL-m-5.7.txt
+install -m 0644 "$WIFI_SOURCE/P-olaf_M-PRNL_V-u__m-5.3.txt" \
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,d111-PRNL-u-5.3.txt
+install -m 0644 "$WIFI_SOURCE/P-olaf_M-PRNL_V-u__m-5.9.txt" \
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,d111-PRNL-u-5.9.txt
+```
+
+Verify that the tree contains exactly seven files and that staging did not
+change their bytes:
+
+```sh
+test "$(find generated-wifi/brcm -maxdepth 1 -type f | wc -l | tr -d ' ')" = 7
+test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.bin | awk '{print $1}')" = \
+  420531da4f43040bdc851e2043e73ac657db0883406e607afcaef7cfbbfc82ba
+test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.clm_blob | awk '{print $1}')" = \
+  fa99d9332574a11d8ff8c675474b47f1af7c3e7333e7acb9450dca11ab52c4d4
+test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.txcap_blob | awk '{print $1}')" = \
+  1b06fbc502499af122d03a7daff97c03384d49feb0fa2717f0b62f3d2d213345
+for firmware in generated-wifi/brcm/*-PRNL-m-*.txt; do
+  test "$(shasum -a 256 "$firmware" | awk '{print $1}')" = \
+    a4dd05f5a6bb76018ac3d595b7193451cbdc1ab291ff46dc70a09e989ea31251
+done
+for firmware in generated-wifi/brcm/*-PRNL-u-*.txt; do
+  test "$(shasum -a 256 "$firmware" | awk '{print $1}')" = \
+    85acf1e7dfb15c65daf329105860aac7b05c955933eb0291c37d4ce1859c8dd0
+done
+```
+
+The `m-5.3`/`m-5.7` pair and the `u-5.3`/`u-5.9` pair currently contain
+identical bytes, but all four names must remain available because the
+firmware-request name includes the detected PRNL profile. Do not substitute
+the iPad 7 `rudderb` firmware or invent a fixed board-type override.
+
+## 7. Install the firmware
+
+Install the common Apple and Broadcom files into the target root filesystem
+using the exact names requested by the Device Tree and drivers:
+
+```sh
+sudo install -d /lib/firmware/apple /lib/firmware/brcm
 sudo install -m 0644 t8010-smartio.bin \
   /lib/firmware/apple/t8010-smartio.bin
 sudo install -m 0644 dfrmtfw-d111-c1f5e-2.bin \
   /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+sudo install -m 0644 generated-wifi/brcm/* /lib/firmware/brcm/
 ```
 
-The validated kernel builds the Apple Z2 and SmartIO drivers into the kernel,
-so their firmware must be present in the early initramfs. Generic dependency
-detection can omit firmware for built-in drivers. On Debian, create an
-`initramfs-tools` hook containing:
+Install the normal Linux regulatory database as well. On Debian:
+
+```sh
+sudo apt-get update
+sudo apt-get install wireless-regdb
+```
+
+The validated kernel builds the Apple Z2, SmartIO, and brcmfmac drivers into
+the kernel, so their firmware and the regulatory database must be present in
+the early initramfs. Generic dependency detection can omit firmware for
+built-in drivers. On Debian, create an `initramfs-tools` hook containing:
 
 ```sh
 #!/bin/sh
@@ -258,6 +382,16 @@ esac
 
 copy_file firmware /lib/firmware/apple/t8010-smartio.bin
 copy_file firmware /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+copy_file firmware /lib/firmware/brcm/brcmfmac4355-pcie.bin
+copy_file firmware /lib/firmware/brcm/brcmfmac4355-pcie.clm_blob
+copy_file firmware /lib/firmware/brcm/brcmfmac4355-pcie.txcap_blob
+
+for firmware in /lib/firmware/brcm/brcmfmac4355-pcie.apple,d111-PRNL-*.txt; do
+    copy_file firmware "$firmware"
+done
+
+copy_file firmware /lib/firmware/regulatory.db
+copy_file firmware /lib/firmware/regulatory.db.p7s
 ```
 
 Save it as `/etc/initramfs-tools/hooks/hoolock-iphone7-firmware`, make it
@@ -268,23 +402,35 @@ sudo chmod 0755 /etc/initramfs-tools/hooks/hoolock-iphone7-firmware
 sudo update-initramfs -u
 ```
 
-For a manually assembled initramfs, copy the same two paths below
-`/lib/firmware/apple` and preserve the names exactly. Verify a Debian
-initramfs with:
+For a manually assembled initramfs, copy the same files below
+`/lib/firmware` and preserve the names exactly. Verify the installation and a
+Debian initramfs with:
 
 ```sh
-test -f "/boot/initrd.img-$(uname -r)"
-lsinitramfs "/boot/initrd.img-$(uname -r)" | \
+test -s /lib/firmware/apple/t8010-smartio.bin
+test -s /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+test "$(find /lib/firmware/brcm -maxdepth 1 \
+  -name 'brcmfmac4355-pcie*' -type f | wc -l | tr -d ' ')" = 7
+test -s /lib/firmware/regulatory.db
+test -s /lib/firmware/regulatory.db.p7s
+
+INITRAMFS="/boot/initrd.img-$(uname -r)"
+test -f "$INITRAMFS"
+lsinitramfs "$INITRAMFS" | \
   grep -q 'apple/t8010-smartio.bin$'
-lsinitramfs "/boot/initrd.img-$(uname -r)" | \
+lsinitramfs "$INITRAMFS" | \
   grep -q 'apple/dfrmtfw-d111-c1f5e-2.bin$'
+test "$(lsinitramfs "$INITRAMFS" | \
+  grep -c 'brcm/brcmfmac4355-pcie')" = 7
+lsinitramfs "$INITRAMFS" | grep -q 'regulatory.db$'
+lsinitramfs "$INITRAMFS" | grep -q 'regulatory.db.p7s$'
 ```
 
 If the initramfs is built on another machine, verify its embedded files by
-extracting it and comparing the two SHA-256 values above. Finding the files
-only in the root filesystem is not sufficient for a built-in driver.
+extracting it and comparing the SHA-256 values above. Finding the files only
+in the root filesystem is not sufficient for a built-in driver.
 
-## 6. Use the D111-capable m1n1 loader
+## 8. Use the D111-capable m1n1 loader
 
 The firmware container contains requests for calibration, not the private
 calibration bytes themselves. Boot it with the D111-capable `idevice` branch
@@ -307,19 +453,105 @@ respectively. m1n1 validates placeholders and bounds before copying. If any
 required value is absent, unresolved, or invalid, it disables the touchscreen
 node and continues booting Linux without touch.
 
-There is no SysCfg trailer for D111 touch. Do not copy `/dev/nvme0n3`, append
-an iPad `m1n1_syscfg` payload, or publish calibration extracted from the
-device.
+This live Device Tree path is specific to D111 touch. Do not add SysCfg to the
+touch firmware container and do not reuse the calibrated iPad converter
+command.
 
-## 7. Verify the running system
+Wi-Fi uses a separate calibration path. The common files under
+`/lib/firmware/brcm` do not contain this iPhone's MAC address or RF
+calibration. The patched loader supplies the private `WMac` and `WCAL` values
+from the same iPhone's SysCfg through Linux NVMEM.
+
+The following read-only step runs on the target iPhone under Linux. On the
+validated storage layout, SysCfg is exposed as `/dev/nvme0n3`. Confirm both
+the block device and its exact size; do not assume the same node on another
+layout or device:
+
+```sh
+test -b /dev/nvme0n3
+test "$(blockdev --getsize64 /dev/nvme0n3)" = 131072
+
+dd if=/dev/nvme0n3 \
+  of=/tmp/d111-syscfg.bin \
+  bs=131072 \
+  count=1 \
+  status=progress
+
+test "$(wc -c < /tmp/d111-syscfg.bin | tr -d ' ')" = 131072
+sha256sum /tmp/d111-syscfg.bin
+```
+
+This `dd` command only reads from NVMe. It does not write to SysCfg, GPT, or
+APFS. Copy the result to the development machine and immediately restrict its
+permissions:
+
+```sh
+IPHONE_ADDRESS=172.16.42.1
+scp "root@$IPHONE_ADDRESS:/tmp/d111-syscfg.bin" syscfg.bin
+chmod 0600 syscfg.bin
+test "$(wc -c < syscfg.bin | tr -d ' ')" = 131072
+```
+
+Validate the container structure and create the bounded m1n1 component with
+Python 3.11:
+
+```sh
+python3.11 - <<'PY'
+from pathlib import Path
+import struct
+
+source = Path("syscfg.bin")
+output = Path("m1n1-syscfg.payload")
+blob = source.read_bytes()
+
+if len(blob) < 24 or blob[:4] != b"gfCS":
+    raise SystemExit("invalid SysCfg header")
+
+_, _, declared_size, _, _, key_count = struct.unpack_from("<4sIIIII", blob)
+if declared_size != len(blob):
+    raise SystemExit(
+        f"declared SysCfg size {declared_size} does not match {len(blob)}"
+    )
+if 24 + key_count * 20 > declared_size:
+    raise SystemExit("SysCfg key table exceeds the declared size")
+
+output.write_bytes(b"m1n1_syscfg" + struct.pack("<I", len(blob)) + blob)
+output.chmod(0o600)
+PY
+
+test "$(wc -c < m1n1-syscfg.payload | tr -d ' ')" = 131087
+```
+
+Include this component exactly once in a payload for the patched D111 m1n1
+loader. The loader reserves a private copy, publishes the `WMac` and `WCAL`
+NVMEM cells, and connects them to the BCM4355 endpoint. Do not install
+`syscfg.bin` under `/lib/firmware`, do not use an iPad or another iPhone's
+dump, and never publish its hash or contents. Both private filenames are
+already ignored by this repository.
+
+After confirming the local copy, remove the temporary target-side file:
+
+```sh
+ssh "root@$IPHONE_ADDRESS" rm -f /tmp/d111-syscfg.bin
+```
+
+Missing D111 `WCAL` allowed the firmware to start but caused a repeated
+firmware TRAP during bring-up. Do not treat a created `wlp2s0` interface as a
+successful test unless platform calibration was accepted and the firmware
+remains stable.
+
+## 9. Verify the running system
 
 After booting the matching kernel, m1n1, Device Tree, and initramfs, verify
 the live binding:
 
 ```sh
-dmesg | grep -E 'apple-z2|SmartIO|touchscreen|firmware'
+dmesg | grep -E 'apple-z2|SmartIO|touchscreen|brcmfmac|Firmware: BCM4355|Calibration blob|TxCap'
 readlink /sys/bus/spi/devices/spi0.0/driver
 grep -A6 -B1 'iPhone9,4 Touchscreen' /proc/bus/input/devices
+test "$(basename "$(readlink /sys/bus/pci/devices/0000:02:00.0/driver)")" = \
+  brcmfmac
+ip link show wlp2s0
 ```
 
 Expected results include:
@@ -327,12 +559,19 @@ Expected results include:
 ```text
 /sys/bus/spi/drivers/apple-z2
 N: Name="iPhone9,4 Touchscreen"
+Firmware: BCM4355/10 ... version 9.44.204.0.3.50.45
 ```
 
-Confirm that the exact D111 firmware was installed:
+The brcmfmac log must also state that the calibration blob was provided by
+the platform and that a TxCap blob was found. Confirm that the exact D111
+firmware was installed:
 
 ```sh
 sha256sum /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
+sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.bin
+sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.clm_blob
+sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.txcap_blob
+sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.apple,d111-PRNL-*.txt
 ```
 
 Finally, use `evtest` on the event device identified in
@@ -341,8 +580,18 @@ test must show changing absolute X/Y coordinates, `SYN_REPORT` frames, and
 balanced touch-down/touch-up events. Merely finding the firmware file or the
 SPI device does not prove that touch is working.
 
+For Wi-Fi, use the distribution's normal NetworkManager or wpa_supplicant
+workflow to scan and connect in station mode. A successful test requires a
+real association, an assigned address, data transfer, and no subsequent
+firmware TRAP or recovery loop. Do not use `nmcli device wifi hotspot` or
+reactivate an AP profile on D111: access-point mode is not validated and the
+tested AP reconfiguration caused a full system freeze.
+
 This exact SmartIO blob, D11 source hash, generated Z2FW hash, dynamic
-calibration path, firmware filename, and initramfs placement were used in the
-validated iPhone 7 Plus boot. `spi0.0` bound to `apple-z2`, the input device
-registered as `iPhone9,4 Touchscreen`, and physical multitouch input was
-confirmed without Z2, SPI, or touchscreen errors.
+calibration path, Wi-Fi source bytes, firmware filenames, and initramfs
+placement were used in the validated iPhone 7 Plus boot. `spi0.0` bound to
+`apple-z2`, the input device registered as `iPhone9,4 Touchscreen`, and
+physical multitouch input was confirmed without Z2, SPI, or touchscreen
+errors. BCM4355 station mode remained firmware-crash-free, associated through
+NetworkManager, and transferred data successfully. The documented 19H390
+Wi-Fi sources are byte-identical to the files used for that test.
