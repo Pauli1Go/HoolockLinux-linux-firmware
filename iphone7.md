@@ -42,7 +42,7 @@ Commands are run from the repository root unless stated otherwise.
 ## Requirements
 
 - [`ipsw`](https://github.com/blacktop/ipsw), tested with version 3.1.696
-- Python 3.11
+- Python 3
 - `curl`
 - `shasum` on macOS or an equivalent SHA-256 tool
 - Git, `make`, and a C compiler to build `makez2fw` and `hcdpack`
@@ -119,10 +119,10 @@ Expected SHA-256:
 
 Stop if the size or hash differs. For this exact kernelcache, the
 `AppleT8010SmartIO` firmware begins at file offset `0x02705000` and is
-`0x00088060` bytes long. Extract it with Python 3.11:
+`0x00088060` bytes long. Extract it with Python 3:
 
 ```sh
-python3.11 - <<'PY'
+python3 - <<'PY'
 from pathlib import Path
 
 source = Path(
@@ -560,7 +560,7 @@ Validate the container structure and create the bounded m1n1 component with
 the repository tool:
 
 ```sh
-python3.11 tools/make_syscfg_payload.py \
+python3 tools/make_syscfg_payload.py \
   syscfg.bin \
   m1n1-syscfg.payload
 test "$(wc -c < m1n1-syscfg.payload | tr -d ' ')" = 131087
