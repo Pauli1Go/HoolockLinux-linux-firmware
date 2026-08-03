@@ -1,5 +1,20 @@
 # Reproducing iPhone 7 Plus/D111 Linux firmware
 
+Before continuing, connect the iPhone in normal iOS mode, trust the computer,
+and identify the hardware variant with `ideviceinfo` from
+[`libimobiledevice`](https://libimobiledevice.org/):
+
+```sh
+ideviceinfo -k HardwareModel
+ideviceinfo -k ProductType
+```
+
+- `D11AP` and `iPhone9,2`: stop here and use the
+  [iPhone 7 Plus/D11 guide](iphone7-d11.md).
+- `D111AP` and `iPhone9,4`: continue with this D111 guide.
+- Any other value or a disagreement between both values: stop and identify
+  the device before extracting or installing firmware.
+
 This document describes how to reproduce the Apple firmware used by
 HoolockLinux on the iPhone 7 Plus (`iPhone9,4`, T8010/D111). The documented
 combination has been booted on hardware. The touchscreen has been verified
