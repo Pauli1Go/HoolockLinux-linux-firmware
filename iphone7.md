@@ -24,10 +24,10 @@ This repository does not distribute Apple firmware, Wi-Fi NVRAM, or
 device-specific calibration. The commands below reproduce the common firmware
 from one Apple restore image. The generated D111 touch container does not
 contain device-specific calibration: the supported m1n1 loader copies touch
-calibration from Apple's live Device Tree at every boot. Wi-Fi calibration is
-provided separately from the same iPhone's private SysCfg. The Bluetooth
-device address comes from `BMac` in that same private SysCfg; the common HCD
-file does not contain it.
+calibration from Apple's live Device Tree at every boot. Wi-Fi calibration and
+CT821 ambient-light calibration are provided separately from the same
+iPhone's private SysCfg. The Bluetooth device address comes from `BMac` in
+that same private SysCfg; the common HCD file does not contain it.
 
 This guide is specific to the iPhone 7 Plus D111. The smaller iPhone 7 uses
 D10 and a different multitouch profile; D10 has not been validated by the
@@ -492,7 +492,7 @@ If the initramfs is built on another machine, verify its embedded files by
 extracting it and comparing the SHA-256 values above. Finding the files only
 in the root filesystem is not sufficient for a built-in driver.
 
-## 9. Use the D111-capable m1n1 loader
+## 9. Prepare private SysCfg for the D111-capable m1n1 loader
 
 The firmware container contains requests for calibration, not the private
 calibration bytes themselves. Boot it with the D111-capable `idevice` branch
@@ -519,11 +519,12 @@ This live Device Tree path is specific to D111 touch. Do not add SysCfg to the
 touch firmware container and do not reuse the calibrated iPad converter
 command.
 
-Wi-Fi uses a separate calibration path. The common files under
-`/lib/firmware/brcm` do not contain this iPhone's MAC address or RF
-calibration. The patched loader supplies the private `WMac` and `WCAL` values
-through Linux NVMEM and the `BMac` value as Bluetooth `local-bd-address`, all
-from the same iPhone's SysCfg.
+Wi-Fi, Bluetooth identity, and the ambient-light sensor use a separate SysCfg
+path. The common files under `/lib/firmware` do not contain this iPhone's MAC
+addresses, Wi-Fi calibration, or CT821 factory calibration. The patched loader
+supplies the private `WMac`, `WCAL`, and `LSCI` values through Linux NVMEM and
+the `BMac` value as Bluetooth `local-bd-address`, all from the same iPhone's
+SysCfg.
 
 The following read-only step runs on the target iPhone under Linux. On the
 validated storage layout, SysCfg is exposed as `/dev/nvme0n3`. Confirm both
@@ -556,42 +557,32 @@ test "$(wc -c < syscfg.bin | tr -d ' ')" = 131072
 ```
 
 Validate the container structure and create the bounded m1n1 component with
-Python 3.11:
+the repository tool:
 
 ```sh
-python3.11 - <<'PY'
-from pathlib import Path
-import struct
-
-source = Path("syscfg.bin")
-output = Path("m1n1-syscfg.payload")
-blob = source.read_bytes()
-
-if len(blob) < 24 or blob[:4] != b"gfCS":
-    raise SystemExit("invalid SysCfg header")
-
-_, _, declared_size, _, _, key_count = struct.unpack_from("<4sIIIII", blob)
-if declared_size != len(blob):
-    raise SystemExit(
-        f"declared SysCfg size {declared_size} does not match {len(blob)}"
-    )
-if 24 + key_count * 20 > declared_size:
-    raise SystemExit("SysCfg key table exceeds the declared size")
-
-output.write_bytes(b"m1n1_syscfg" + struct.pack("<I", len(blob)) + blob)
-output.chmod(0o600)
-PY
-
+python3.11 tools/make_syscfg_payload.py \
+  syscfg.bin \
+  m1n1-syscfg.payload
 test "$(wc -c < m1n1-syscfg.payload | tr -d ' ')" = 131087
+case "$(uname -s)" in
+  Darwin) test "$(stat -f '%Lp' m1n1-syscfg.payload)" = 600 ;;
+  *) test "$(stat -c '%a' m1n1-syscfg.payload)" = 600 ;;
+esac
 ```
 
+The tool rejects an invalid header or declared size, an out-of-bounds key
+table or jumbo value, missing or duplicate D111 `WMac`, `WCAL`, `BMac`, or
+`LSCI` records, and malformed LSCI framing or checksum. It does not print the
+private values or their hashes. The output is created exclusively with mode
+0600 and an existing destination is never overwritten.
+
 Include this component exactly once in a payload for the patched D111 m1n1
-loader. The loader reserves a private copy, publishes the `WMac` and `WCAL`
-NVMEM cells, connects them to the BCM4355 Wi-Fi endpoint, and writes `BMac`
-to the Bluetooth node in the byte order expected by Linux. Do not install
-`syscfg.bin` under `/lib/firmware`, do not use an iPad or another iPhone's
-dump, and never publish its hash or contents. Both private filenames are
-already ignored by this repository.
+loader. The loader reserves a private copy, publishes the `WMac`, `WCAL`, and
+`LSCI` NVMEM cells, connects them to the BCM4355 Wi-Fi and CT821 consumers,
+and writes `BMac` to the Bluetooth node in the byte order expected by Linux.
+Do not install `syscfg.bin` under `/lib/firmware`, do not use an iPad or
+another iPhone's dump, and never publish its hash or contents. Both private
+filenames are already ignored by this repository.
 
 The public HCD file and the private SysCfg records serve different purposes.
 The HCD provides Patchram code; `BMac` provides the device address. Private
@@ -615,7 +606,7 @@ After booting the matching kernel, m1n1, Device Tree, and initramfs, verify
 the live binding:
 
 ```sh
-dmesg | grep -E 'apple-z2|SmartIO|touchscreen|brcmfmac|Firmware: BCM4355|Calibration blob|TxCap|Bluetooth: hci0'
+dmesg | grep -E 'apple-z2|SmartIO|touchscreen|brcmfmac|Firmware: BCM4355|Calibration blob|TxCap|Bluetooth: hci0|LSCI|Light sensor'
 readlink /sys/bus/spi/devices/spi0.0/driver
 grep -A6 -B1 'iPhone9,4 Touchscreen' /proc/bus/input/devices
 test "$(basename "$(readlink /sys/bus/pci/devices/0000:02:00.0/driver)")" = \
@@ -624,6 +615,12 @@ ip link show wlp2s0
 test -e /sys/class/bluetooth/hci0
 systemctl --no-pager --full status bluetooth.service
 bluetoothctl show
+IIO_DEVICE="$(grep -l '^ct821$' /sys/bus/iio/devices/iio:device*/name | \
+  sed 's,/name$,,')"
+test -n "$IIO_DEVICE"
+cat "$IIO_DEVICE/in_illuminance_both_raw"
+cat "$IIO_DEVICE/in_illuminance_ir_raw"
+cat "$IIO_DEVICE/in_illuminance_input"
 ```
 
 Expected results include:
@@ -632,6 +629,8 @@ Expected results include:
 /sys/bus/spi/drivers/apple-z2
 N: Name="iPhone9,4 Touchscreen"
 Firmware: BCM4355/10 ... version 9.44.204.0.3.50.45
+loaded LSCI ambient-light calibration
+Light sensor found.
 ```
 
 The brcmfmac log must also state that the calibration blob was provided by
@@ -668,6 +667,13 @@ physical multitouch input was confirmed without Z2, SPI, or touchscreen
 errors. BCM4355 station mode remained firmware-crash-free, associated through
 NetworkManager, and transferred data successfully. The documented 19H390
 Wi-Fi sources are byte-identical to the files used for that test.
+
+The CT821 is exposed as the standard IIO device `ct821`. Its broadband and
+infrared raw channels and processed lux value must change plausibly with
+ambient light. `iio-sensor-proxy` and GNOME automatic brightness use this IIO
+interface without a device-specific userspace daemon. Missing or invalid
+`LSCI` calibration must fail the CT821 probe instead of silently producing
+uncalibrated values.
 
 The D111 Bluetooth controller is exposed as a normal BlueZ HCI controller.
 The kernel powers it through the standard serdev path, switches the Broadcom
