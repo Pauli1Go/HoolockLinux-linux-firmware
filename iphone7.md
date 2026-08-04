@@ -29,10 +29,10 @@ The completed installation contains:
 /lib/firmware/apple/t8010-smartio.bin
 /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
 /lib/firmware/brcm/BCM.apple,d111.hcd
-/lib/firmware/brcm/brcmfmac4355-pcie.bin
-/lib/firmware/brcm/brcmfmac4355-pcie.clm_blob
-/lib/firmware/brcm/brcmfmac4355-pcie.txcap_blob
-/lib/firmware/brcm/brcmfmac4355-pcie.apple,d111-PRNL-*.txt
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,olaf.bin
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,olaf.clm_blob
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,olaf.txcap_blob
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,olaf-PRNL-*.txt
 ```
 
 This repository does not distribute Apple firmware, Wi-Fi NVRAM, or
@@ -43,6 +43,10 @@ calibration from Apple's live Device Tree at every boot. Wi-Fi calibration and
 CT821 ambient-light calibration are provided separately from the same
 iPhone's private SysCfg. The Bluetooth device address comes from `BMac` in
 that same private SysCfg; the common HCD file does not contain it.
+
+The D111 Device Tree sets `brcm,board-type` to `apple,olaf`, matching Apple's
+Wi-Fi module-instance name. All BCM4355 Wi-Fi files below therefore use
+`apple,olaf`-qualified names so they can coexist with the D11 `sven` family.
 
 This guide is specific to the iPhone 7 Plus D111. The smaller iPhone 7 uses
 D10 and a different multitouch profile; D10 has not been validated by the
@@ -307,34 +311,34 @@ Apple and Linux use different names for the same data:
 
 | Apple source | brcmfmac destination |
 | --- | --- |
-| `olaf.trx` | `brcmfmac4355-pcie.bin` |
-| `olaf.clmb` | `brcmfmac4355-pcie.clm_blob` |
-| `olaf.txcb` | `brcmfmac4355-pcie.txcap_blob` |
-| `P-olaf_M-PRNL_V-m__m-5.3.txt` | `brcmfmac4355-pcie.apple,d111-PRNL-m-5.3.txt` |
-| `P-olaf_M-PRNL_V-m__m-5.7.txt` | `brcmfmac4355-pcie.apple,d111-PRNL-m-5.7.txt` |
-| `P-olaf_M-PRNL_V-u__m-5.3.txt` | `brcmfmac4355-pcie.apple,d111-PRNL-u-5.3.txt` |
-| `P-olaf_M-PRNL_V-u__m-5.9.txt` | `brcmfmac4355-pcie.apple,d111-PRNL-u-5.9.txt` |
+| `olaf.trx` | `brcmfmac4355-pcie.apple,olaf.bin` |
+| `olaf.clmb` | `brcmfmac4355-pcie.apple,olaf.clm_blob` |
+| `olaf.txcb` | `brcmfmac4355-pcie.apple,olaf.txcap_blob` |
+| `P-olaf_M-PRNL_V-m__m-5.3.txt` | `brcmfmac4355-pcie.apple,olaf-PRNL-m-5.3.txt` |
+| `P-olaf_M-PRNL_V-m__m-5.7.txt` | `brcmfmac4355-pcie.apple,olaf-PRNL-m-5.7.txt` |
+| `P-olaf_M-PRNL_V-u__m-5.3.txt` | `brcmfmac4355-pcie.apple,olaf-PRNL-u-5.3.txt` |
+| `P-olaf_M-PRNL_V-u__m-5.9.txt` | `brcmfmac4355-pcie.apple,olaf-PRNL-u-5.9.txt` |
 
 Create a new staging tree with the exact names requested by modern
-`brcmfmac` for root compatible `apple,d111`:
+`brcmfmac` for board type `apple,olaf`:
 
 ```sh
 test ! -e generated-wifi
 install -d generated-wifi/brcm
 install -m 0644 "$WIFI_SOURCE/olaf.trx" \
-  generated-wifi/brcm/brcmfmac4355-pcie.bin
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf.bin
 install -m 0644 "$WIFI_SOURCE/olaf.clmb" \
-  generated-wifi/brcm/brcmfmac4355-pcie.clm_blob
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf.clm_blob
 install -m 0644 "$WIFI_SOURCE/olaf.txcb" \
-  generated-wifi/brcm/brcmfmac4355-pcie.txcap_blob
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf.txcap_blob
 install -m 0644 "$WIFI_SOURCE/P-olaf_M-PRNL_V-m__m-5.3.txt" \
-  generated-wifi/brcm/brcmfmac4355-pcie.apple,d111-PRNL-m-5.3.txt
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf-PRNL-m-5.3.txt
 install -m 0644 "$WIFI_SOURCE/P-olaf_M-PRNL_V-m__m-5.7.txt" \
-  generated-wifi/brcm/brcmfmac4355-pcie.apple,d111-PRNL-m-5.7.txt
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf-PRNL-m-5.7.txt
 install -m 0644 "$WIFI_SOURCE/P-olaf_M-PRNL_V-u__m-5.3.txt" \
-  generated-wifi/brcm/brcmfmac4355-pcie.apple,d111-PRNL-u-5.3.txt
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf-PRNL-u-5.3.txt
 install -m 0644 "$WIFI_SOURCE/P-olaf_M-PRNL_V-u__m-5.9.txt" \
-  generated-wifi/brcm/brcmfmac4355-pcie.apple,d111-PRNL-u-5.9.txt
+  generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf-PRNL-u-5.9.txt
 ```
 
 Verify that the tree contains exactly seven files and that staging did not
@@ -342,11 +346,11 @@ change their bytes:
 
 ```sh
 test "$(find generated-wifi/brcm -maxdepth 1 -type f | wc -l | tr -d ' ')" = 7
-test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.bin | awk '{print $1}')" = \
+test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf.bin | awk '{print $1}')" = \
   420531da4f43040bdc851e2043e73ac657db0883406e607afcaef7cfbbfc82ba
-test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.clm_blob | awk '{print $1}')" = \
+test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf.clm_blob | awk '{print $1}')" = \
   fa99d9332574a11d8ff8c675474b47f1af7c3e7333e7acb9450dca11ab52c4d4
-test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.txcap_blob | awk '{print $1}')" = \
+test "$(shasum -a 256 generated-wifi/brcm/brcmfmac4355-pcie.apple,olaf.txcap_blob | awk '{print $1}')" = \
   1b06fbc502499af122d03a7daff97c03384d49feb0fa2717f0b62f3d2d213345
 for firmware in generated-wifi/brcm/*-PRNL-m-*.txt; do
   test "$(shasum -a 256 "$firmware" | awk '{print $1}')" = \
@@ -361,7 +365,7 @@ done
 The `m-5.3`/`m-5.7` pair and the `u-5.3`/`u-5.9` pair currently contain
 identical bytes, but all four names must remain available because the
 firmware-request name includes the detected PRNL profile. Do not substitute
-the iPad 7 `rudderb` firmware or invent a fixed board-type override.
+the iPad 7 `rudderb` firmware or a different Apple module-instance name.
 
 ## 7. Extract the BCM4355C0 Bluetooth firmware
 
@@ -655,10 +659,10 @@ firmware was installed:
 ```sh
 sha256sum /lib/firmware/apple/dfrmtfw-d111-c1f5e-2.bin
 sha256sum /lib/firmware/brcm/BCM.apple,d111.hcd
-sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.bin
-sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.clm_blob
-sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.txcap_blob
-sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.apple,d111-PRNL-*.txt
+sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.apple,olaf.bin
+sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.apple,olaf.clm_blob
+sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.apple,olaf.txcap_blob
+sha256sum /lib/firmware/brcm/brcmfmac4355-pcie.apple,olaf-PRNL-*.txt
 ```
 
 Finally, use `evtest` on the event device identified in

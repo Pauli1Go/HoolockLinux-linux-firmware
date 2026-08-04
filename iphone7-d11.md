@@ -19,16 +19,17 @@ The completed D11 installation contains:
 /lib/firmware/apple/t8010-smartio.bin
 /lib/firmware/apple/dfrmtfw-d11-c1f5e-2.bin
 /lib/firmware/brcm/BCM.apple,d11.hcd
-/lib/firmware/brcm/brcmfmac4355-pcie.apple,d11.bin
-/lib/firmware/brcm/brcmfmac4355-pcie.apple,d11.clm_blob
-/lib/firmware/brcm/brcmfmac4355-pcie.apple,d11.txcap_blob
-/lib/firmware/brcm/brcmfmac4355-pcie.apple,d11-PRNL-*.txt
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,sven.bin
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,sven.clm_blob
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,sven.txcap_blob
+/lib/firmware/brcm/brcmfmac4355-pcie.apple,sven-PRNL-*.txt
 ```
 
-The board-qualified D11 Wi-Fi names are intentional. D111 uses the `olaf`
-firmware family while D11 uses `sven`. Installing `sven` under D11-qualified
-names allows one root filesystem to retain the existing D111 `olaf` files.
-Renaming an `olaf` file does not turn it into D11 firmware.
+The board-type-qualified D11 Wi-Fi names are intentional. The D11 Device Tree
+sets `brcm,board-type` to `apple,sven`, matching Apple's Wi-Fi module-instance
+name. D111 uses the separate `olaf` firmware family. These names allow one
+root filesystem to retain both families. Renaming an `olaf` file does not turn
+it into D11 firmware.
 
 This repository does not distribute Apple firmware, Wi-Fi NVRAM, Bluetooth
 Patchram, or private device calibration. Common firmware is reproduced from
@@ -231,24 +232,25 @@ The equal hashes within each vendor pair do not make the names interchangeable:
 the driver constructs its request from the module's OTP vendor and version.
 Install all four NVRAM names so the real module selects its own file.
 
-Stage the files with D11-qualified names:
+Stage the files with the `apple,sven` board-type-qualified names requested by
+`brcmfmac`:
 
 ```sh
 install -d generated-d11/brcm
 install -m 0644 "$WIFI_SOURCE/sven.trx" \
-  generated-d11/brcm/brcmfmac4355-pcie.apple,d11.bin
+  generated-d11/brcm/brcmfmac4355-pcie.apple,sven.bin
 install -m 0644 "$WIFI_SOURCE/sven.clmb" \
-  generated-d11/brcm/brcmfmac4355-pcie.apple,d11.clm_blob
+  generated-d11/brcm/brcmfmac4355-pcie.apple,sven.clm_blob
 install -m 0644 "$WIFI_SOURCE/sven.txcb" \
-  generated-d11/brcm/brcmfmac4355-pcie.apple,d11.txcap_blob
+  generated-d11/brcm/brcmfmac4355-pcie.apple,sven.txcap_blob
 install -m 0644 "$WIFI_SOURCE/P-sven_M-PRNL_V-m__m-5.3.txt" \
-  generated-d11/brcm/brcmfmac4355-pcie.apple,d11-PRNL-m-5.3.txt
+  generated-d11/brcm/brcmfmac4355-pcie.apple,sven-PRNL-m-5.3.txt
 install -m 0644 "$WIFI_SOURCE/P-sven_M-PRNL_V-m__m-5.7.txt" \
-  generated-d11/brcm/brcmfmac4355-pcie.apple,d11-PRNL-m-5.7.txt
+  generated-d11/brcm/brcmfmac4355-pcie.apple,sven-PRNL-m-5.7.txt
 install -m 0644 "$WIFI_SOURCE/P-sven_M-PRNL_V-u__m-5.3.txt" \
-  generated-d11/brcm/brcmfmac4355-pcie.apple,d11-PRNL-u-5.3.txt
+  generated-d11/brcm/brcmfmac4355-pcie.apple,sven-PRNL-u-5.3.txt
 install -m 0644 "$WIFI_SOURCE/P-sven_M-PRNL_V-u__m-5.9.txt" \
-  generated-d11/brcm/brcmfmac4355-pcie.apple,d11-PRNL-u-5.9.txt
+  generated-d11/brcm/brcmfmac4355-pcie.apple,sven-PRNL-u-5.9.txt
 ```
 
 The IPSW also contains `sven-CN` and `sven-JP`. The current Sandcastle D11
